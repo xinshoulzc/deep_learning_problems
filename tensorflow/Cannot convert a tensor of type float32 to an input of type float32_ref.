@@ -36,6 +36,9 @@ The batch_normalization function before:
           tensor_in, mean, var, beta, gamma, epsilon,
           scale_after_normalization=True, name=name)
 
+update code came from tensorflow inception 
+	https://github.com/tensorflow/models/blob/master/inception/inception/slim/ops.py
+
 The batch_normalization function up-to-date:
     
     def batch_normalize_update(self, tensor_in,
