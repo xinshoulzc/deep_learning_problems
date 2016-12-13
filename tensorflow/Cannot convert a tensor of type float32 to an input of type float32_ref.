@@ -1,0 +1,70 @@
+Description: 
+    Input tensor 'G_conv_1/batch_norm/moving_mean:0' Cannot convert a tensor of type float32 to an input of type float32_ref.
+    This issue resembles https://github.com/tensorflow/tensorflow/issues/616
+
+The batch_normalization function before:
+
+    def batch_normalize(self, tensor_in,
+                        n_filters,
+                        epsilon=1e-5,
+                        decay=0.9,
+                        name='batch_norm'):
+        """Batch normalization.
+        Args:
+          tensor_in: input `Tensor`, 4D shape: [batch, in_height, in_width, in_filters].
+          epsilon : A float number to avoid being divided by 0.
+          decay: Decay rate for exponential moving average.
+    
+        Returns:
+          A batch-normalized `Tensor`.
+        """
+        gamma = self.get_var("gamma", [n_filters],
+          initializer=init_ops.random_normal_initializer(1., 0.02))
+        beta = self.get_var("beta", [n_filters],            
+          initializer=init_ops.constant_initializer(0.))
+        batch_mean, batch_var = tf.nn.moments(tensor_in, [0, 1, 2])
+        batch_mean = tf.reshape(batch_mean, [n_filters]) # explicitly set shape
+        batch_var = tf.reshape(batch_var, [n_filters])  # explicitly set shape
+        ema = moving_averages.ExponentialMovingAverage(decay=decay)        
+        if self.is_train: 
+          ema_apply_op = ema.apply([batch_mean, batch_var], name="EMA")
+          with tf.control_dependencies([ema_apply_op]):
+              mean, var = tf.identity(batch_mean), tf.identity(batch_var)
+        else:
+          mean, var = (ema.average(batch_mean), ema.average(batch_var))
+        return tf.nn.batch_norm_with_global_normalization(
+          tensor_in, mean, var, beta, gamma, epsilon,
+          scale_after_normalization=True, name=name)
+
+The batch_normalization function up-to-date:
+    
+    def batch_normalize_update(self, tensor_in,
+                        n_filters,
+                        epsilon=1e-5,
+                        decay=0.9,
+                        name='batch_norm',
+                        moving_vars='moving_vars'):
+      
+      gamma = self.get_var("gamma", [n_filters],
+        initializer=init_ops.random_normal_initializer(1., 0.02))
+      beta = self.get_var("beta", [n_filters],
+        initializer=init_ops.constant_initializer(0.))
+      mean, variance = tf.nn.moments(tensor_in, [0, 1, 2])
+      mean = tf.reshape(mean, [n_filters]) # explicitly set shape
+      variance = tf.reshape(variance, [n_filters])  # explicitly set shape
+      moving_mean = self.get_var("moving_mean", [n_filters], initializer=tf.zeros_initializer, trainable=False)
+      moving_variance = self.get_var("moving_variance", [n_filters], initializer=tf.ones_initializer, trainable=False)
+      if self.is_train is None:
+        update_moving_mean = moving_averages.assign_moving_average(moving_mean, mean, decay)
+        update_moving_variance = moving_averages.assign_moving_average(moving_variance, variance, decay)
+      else:
+        mean = moving_mean
+        variance = moving_variance
+      return tf.nn.batch_normalization(
+        tensor_in, mean, variance, beta, gamma, epsilon)
+
+This bug caused by moving_mean and moving_variance storing:
+    By using graph_util.convert_variables_to_constants(), moving_mean and moving_average was stored in nodes, but the values  of moving_mean and moving_variance were refenrence values.
+One more important thing should pay attention:
+  The graph was dynamically built, so is_train may change in training process and applying process
+  I try to use placeholder to build this graph
